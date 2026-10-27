@@ -3,8 +3,9 @@
 How I designed, built and run a live booking, membership and payments platform for a gym, and
 what the code that keeps members' money and data safe looks like.
 
-The platform's codebase is private. This repo has the write-up plus ten excerpts taken from
-production code. Comments are lightly edited, and each excerpt says what changed.
+The platform's codebase is private. It was built through 2026, and the cutover to it went live in
+September 2026. This repo, put together in October 2026, has the write-up plus ten excerpts taken
+from production code. Comments are lightly edited, and each excerpt says what changed.
 
 **Joree Weatherly** · Technical Product & Solutions · [joreeweatherly.com](https://joreeweatherly.com) ·
 [LinkedIn](https://www.linkedin.com/in/joreeweatherly)
@@ -27,7 +28,7 @@ implementation, review their work, and merge every change by hand.
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     M["Members &amp; staff<br/>(browser)"] --> SPA["React + TypeScript app<br/>(Vercel)"]
     SPA --> AUTH["Supabase Auth"]
     SPA --> API["Auto-generated REST API"]
