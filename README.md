@@ -25,6 +25,31 @@ Sole technical owner: requirements with the owner, architecture, build, data mig
 management and day-to-day support. I write the tickets, direct AI coding agents that do much of the
 implementation, review their work, and merge every change by hand.
 
+## What it looks like
+
+**Members book their own sessions.** The weekly calendar shows open spots, with trainer-led
+sessions marked.
+
+![Member dashboard with the weekly booking calendar](screenshots/01-member-booking-calendar.png)
+
+| Booking a session | Pricing and memberships |
+| -- | -- |
+| ![Booking dialog: session type and equipment choice](screenshots/02-booking-dialog.png) | ![Pricing page: intro offer, packs and monthly memberships](screenshots/03-pricing.png) |
+| The member picks a session type and a piece of equipment. Credits are checked before the booking is confirmed. | Intro offer, session packs and monthly memberships, all paid through Square. |
+
+**Staff run the day from their own dashboard:** calendar, availability, the day's schedule,
+late cancellations, payouts, support and an email audit, all in one place.
+
+![Facilitator dashboard with operations tabs](screenshots/04-facilitator-dashboard.png)
+
+| On a phone |
+| -- |
+| ![Three-day calendar view on a phone-sized screen](screenshots/05-mobile-calendar.png) |
+| Phones default to a three-day view, so the calendar stays readable without sideways scrolling. |
+
+*Screenshots are from the live app. Member and staff names, email addresses and a staff
+member's name in the calendar key were removed before publishing.*
+
 ## Architecture
 
 ```mermaid
@@ -108,6 +133,14 @@ Every ticket goes through five steps: check the ticket's claims against the code
 have a dissenting reviewer attack the chosen one, then build; prove it in the running app; trace
 what it might break and test each item; review, open the PR and stop. The commands, agents and CI
 templates are public in [agentic-workflow](https://github.com/J0r33/agentic-workflow).
+
+Every PR then has to pass 26 automated checks before it can merge: type checks, linting, tests and
+coverage, a replay of every database migration on a fresh database, migration linting, secret
+scanning, dependency audits, static analysis, accessibility scans at desktop and phone widths, and
+checks on the PR's own template and blast-radius section. Four of them are required by branch
+protection, and the merge itself is still done by hand.
+
+![26 passing CI checks on a single pull request](screenshots/06-ci-checks.png)
 
 ## License
 
