@@ -1,5 +1,9 @@
 # Booking & payments platform — case study
 
+[![docs-check](https://github.com/J0r33/booking-platform-case-study/actions/workflows/docs-check.yml/badge.svg)](https://github.com/J0r33/booking-platform-case-study/actions/workflows/docs-check.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![Status: live in production since September 2026](https://img.shields.io/badge/status-live%20since%20Sep%202026-brightgreen)
+
 How I designed, built and run a live booking, membership and payments platform for a gym, and
 what the code that keeps members' money and data safe looks like.
 
@@ -78,6 +82,54 @@ flowchart TB
 | Hosting and CI | Vercel, GitHub Actions | Preview per PR, and promotion from `dev` → `staging` → `main` |
 | Tickets | Linear | One ticket per PR, so every change has a written reason |
 
+## Follow one booking
+
+A member books a $40 trainer-led session. This is the path it takes through production, read from
+the code. At each step, the question is what happens if it runs twice, or stops halfway.
+
+1. **The member taps Book.** The booking dialog calls the `book-trainer-session` edge function with
+   an idempotency key the browser generated. A retry after a declined card reuses that key. Only an
+   attempt that ended in a refund gets a new one.
+2. **The attempt is claimed before anything else.** A database function claims the attempt for that
+   key. A second tap while the first is running gets "booking in progress". A repeat of a finished
+   attempt gets the first answer back. If the claim can't be read, the function refuses rather than
+   charge.
+3. **Every check runs before any money moves.** It checks the liability waiver, the member's
+   fee-free sessions and weekly limits, and whether the slot is free. A refusal releases the claim,
+   and nothing is charged.
+4. **Square takes the payment.** The function calls Square's payments API with a key built from
+   the member, the slot and the amount ([03](excerpts/03-idempotency-keys.ts)). On a timeout, the
+   claim stays retryable, and the retry sends the same key, so Square returns the first payment
+   instead of charging again.
+5. **The booking is named before it is written.** The claim records the planned booking id and the
+   payment id first. At no point has money moved without the claim naming the booking it paid for.
+6. **The booking is inserted, and the database has the last word.** An exclusion constraint makes
+   an overlapping booking impossible ([05](excerpts/05-booking-overlap-constraints.sql)). If the
+   insert fails, the attempt is marked spent, then the member is refunded with its own fixed key,
+   so the refund can't be issued twice.
+7. **The charge is recorded, then the attempt is marked done.** The Square payment id and the
+   member's key are both unique columns. If this write fails, the booking is cancelled first, then
+   the charge is refunded with its own fixed key. Errors are scrubbed before they are stored
+   ([08](excerpts/08-error-scrubbing.ts)).
+8. **The member sees "Session booked — $40.00 charged",** and the app asks for the confirmation
+   email.
+9. **The confirmation goes to the member, and a notification to the trainer.** Each email's
+   idempotency key comes from the booking, and both are written to a send log and placed on a
+   Postgres queue. A suppressed address is checked first, and that check fails closed.
+10. **A worker sends it through Resend.** A scheduled worker drains the queue every few seconds and
+    passes Resend an idempotency key. Retries are counted from real send failures, and after five
+    a message goes to a dead-letter queue with its reason ([07](excerpts/07-email-retry-budget.ts)).
+    Before sending, it checks whether that message was already sent, and if the check itself fails,
+    it does not send.
+
+**Where the Square webhook fits.** It isn't on this path, because the payment answer comes back
+synchronously in step 4. The webhook's job is the money coming *back*. When a refund is issued,
+including one made by hand at the front desk, Square sends a signed event
+([01](excerpts/01-webhook-signature.ts)). The webhook matches it to what was bought (a membership,
+a pack, a day pass, a drop-in, a mask purchase or rental) and reverses what the refund paid for.
+Refunds arrive more than once, so recording them is idempotent
+([02](excerpts/02-webhook-duplicate-delivery.ts)).
+
 ## Key decisions
 
 - **Moved off the no-code tool into a codebase the business owns.** Every schema change is a
@@ -102,15 +154,62 @@ flowchart TB
 - **Checks fail closed.** Several CI checks turned out to report success while checking nothing. Each
   one now refuses to pass when it could not run, and each was shown failing on purpose before it was
   trusted ([10](excerpts/10-fail-closed-deploy-gate.sh)).
-- **Split the platform when the business split.** When the company separated into two legal
-  entities, I divided one shared app and database into separate systems for each business.
+- **Split the platform when the business split.** When the fitness center became its own LLC, I
+  separated it from the wellness center it had shared one app with, in a week, and staged the
+  payment-account switch behind a written runbook. See [Client delivery](#client-delivery).
+
+## Client delivery
+
+### Splitting the platform when the business split
+
+**Before.** One app, one database and one domain served two businesses: the fitness center, and
+Hidden Springs Wellness Center's practitioner directory, contact form and room rentals. Both ran
+on one Square merchant account and sent email from one domain.
+
+**The trigger.** On 4 September 2026, the day after the platform went live on its new hosting, the
+owner decided to form a new LLC for the fitness center: O2Oasis.
+
+**What I did.**
+
+- **Ran it as three tracks with their own tickets:** the domain move, the wellness center's
+  marketing site, and the Square and LLC separation. Each could ship or wait without holding up
+  the others.
+- **Gave the wellness center only what it needed.** Its site moved to its own repo, its own
+  hosting project, and a small backend of its own (3 tables and 1 function) with its own migration
+  pipeline. It did not get a copy of the booking platform.
+- **Kept every member exactly where they were.** All 74 accounts stayed on the O2Oasis platform.
+  The new domain was added to the sign-in redirect allow-list before any traffic moved. Links in
+  emails already sent kept working through a temporary redirect, and the old site got 12 "we've
+  moved" pages pointing members to the new one.
+- **Moved the wellness center's enquiries with a script, not by hand.** It runs export, preflight,
+  an import in a single transaction, and a row-by-row checksum comparison. It prints counts only,
+  never personal data. Two rehearsals on local copies verified 19 of 19 and 13 of 13 rows. They
+  also caught three bugs before production: `pg_restore --table` reporting success after moving
+  0 rows, a timezone setting corrupting the row counts, and a temporary file of personal data
+  left on disk.
+- **Updated the legal copy.** The liability waiver and the privacy policy now name O2Oasis LLC.
+- **Removed the old brand from the app,** with redirects for retired pages. Leftover wellness
+  center code had been misleading the AI agents: a stale draft policy claimed the two businesses
+  shared a database.
+
+**What's deliberately still open.** Payments still run on the original Square merchant account.
+Saved cards belong to one merchant account, so switching to the new LLC's account means every
+member on a recurring membership re-enters their card, and the card-update flow needs a change to
+support that. The platform keeps the existing account until Square finishes underwriting the new
+LLC. The switch, including its rollback, is written as a runbook ready to execute.
+
+**Outcome.** The new domain and the separate marketing site went to production on 11 September,
+a week after the decision, with no member losing access.
 
 ## Results
 
-- 500+ pull requests across the platform repos, each tied to its own ticket
+- 477 merged pull requests on the platform repo from July to October 2026, 418 of them tied to
+  their own ticket
 - Members moved to the new platform with no service interruption
-- Releases go out in waves: `dev` → staging QA → production, with every merge done by hand
-- Platform separated cleanly across two legal entities
+- 12 production releases since go-live, each one a wave promoted through `dev` → staging QA →
+  production, with every merge done by hand
+- Platform split across two businesses in a week, with the payment-account switch staged behind
+  a runbook
 
 ## The excerpts
 
